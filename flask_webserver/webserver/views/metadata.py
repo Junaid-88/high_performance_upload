@@ -24,7 +24,7 @@ metadata_bp = Blueprint("metadata", __name__)
 
 
 @metadata_bp.post("/insert-metadata")
-@jwt_required
+@jwt_required()
 def insert_metadata():
     data = request.json
     email_id = get_jwt_identity()
@@ -39,7 +39,7 @@ def insert_metadata():
 
 
 @metadata_bp.post("/get-metadata")
-@jwt_required
+@jwt_required()
 def get_metadata():
     email_id = get_jwt_identity()
     metadata = Storage.get_metadata_for_user(email_id)

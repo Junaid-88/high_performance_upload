@@ -4,7 +4,7 @@ from webserver import db
 
 
 def check_if_user_name_is_unique(user_name: str) -> bool:
-    query = 'SELECT user_name FROM "user" WHERE user_name = :user_name'
+    query = 'SELECT user_name FROM users WHERE user_name = :user_name'
     with db.engine.connect() as conn:
         res = conn.execute(text(query), {"user_name": user_name})
         if res.rowcount == 0:
