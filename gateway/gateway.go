@@ -3,7 +3,6 @@ package main
 
 import (
 	"bytes"
-
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/panjf2000/gnet/v2"
 )
 
@@ -53,9 +53,28 @@ func NewHTTPGateway() *HTTPGateway {
 	}
 }
 
+// ============================================
+// WebSocket Upgrader
+// ============================================
+
+var wsUpgrader = websocket.Upgrader{
+	// NOTE: CheckOrigin allows all origins here because this gateway is an
+	// internal service only reachable from the Docker network / localhost.
+	// Restrict this to trusted origins if the gateway is ever exposed publicly.
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
 func (gw *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Log request
 	log.Printf("📥 HTTP %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+
+	// Route WebSocket upload bridge before regular proxy routing
+	if r.URL.Path == "/ws/upload" {
+		gw.handleWSUpload(w, r)
+		return
+	}
 
 	// Route based on path
 	switch {
@@ -69,6 +88,83 @@ func (gw *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("→ Routing to Flask: %s", r.URL.Path)
 		gw.flaskProxy.ServeHTTP(w, r)
 	}
+}
+
+// handleWSUpload upgrades an HTTP connection to WebSocket and bridges it to the gnet TCP backend.
+func (gw *HTTPGateway) handleWSUpload(w http.ResponseWriter, r *http.Request) {
+	wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ WebSocket upgrade failed: %v", err)
+		return
+	}
+
+	tcpConn, err := net.DialTimeout("tcp", GNET_BINARY_BACKEND, 5*time.Second)
+	if err != nil {
+		log.Printf("❌ Failed to connect to gnet backend: %v", err)
+		wsConn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "backend unavailable"))
+		wsConn.Close()
+		return
+	}
+
+	log.Printf("🔗 WS bridge: %s → %s", wsConn.RemoteAddr(), GNET_BINARY_BACKEND)
+
+	// Use sync.Once so each connection is closed exactly once regardless of
+	// which goroutine encounters an error first.
+	var (
+		onceWS  sync.Once
+		onceTCP sync.Once
+	)
+	closeWS  := func() { onceWS.Do(func() { wsConn.Close() }) }
+	closeTCP := func() { onceTCP.Do(func() { tcpConn.Close() }) }
+
+	// done is closed when the WS→TCP goroutine exits (browser closed or error).
+	done := make(chan struct{})
+
+	// WS → TCP: forward binary messages from the browser to the gnet server.
+	go func() {
+		defer close(done)
+		defer closeTCP()
+		for {
+			msgType, data, err := wsConn.ReadMessage()
+			if err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Printf("❌ WS read error: %v", err)
+				}
+				return
+			}
+			if msgType == websocket.BinaryMessage {
+				if _, err := tcpConn.Write(data); err != nil {
+					log.Printf("❌ TCP write error: %v", err)
+					return
+				}
+			}
+		}
+	}()
+
+	// TCP → WS: forward raw bytes from the gnet server back to the browser.
+	go func() {
+		defer closeWS()
+		buf := make([]byte, 64*1024)
+		for {
+			n, err := tcpConn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("❌ TCP read error: %v", err)
+				}
+				return
+			}
+			if n > 0 {
+				if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+					log.Printf("❌ WS write error: %v", err)
+					return
+				}
+			}
+		}
+	}()
+
+	<-done
+	closeWS()
 }
 
 func isGnetHTTPRoute(path string) bool {
