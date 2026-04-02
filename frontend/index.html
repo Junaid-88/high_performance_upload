@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>High Performance Upload</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 640px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #f0f6fc;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h1 span.icon { font-size: 1.6rem; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: #c9d1d9;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus, input[type="file"]:focus {
+      border-color: #388bfd;
+    }
+
+    input[type="file"] {
+      cursor: pointer;
+      padding: 8px 14px;
+    }
+
+    .field { margin-bottom: 18px; }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+
+    button {
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      outline: none;
+    }
+
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-primary  { background: #238636; color: #fff; }
+    .btn-warning  { background: #9e6a03; color: #fff; }
+    .btn-success  { background: #1f6feb; color: #fff; }
+    .btn-danger   { background: #b62324; color: #fff; }
+
+    .progress-section {
+      margin-top: 24px;
+      display: none;
+    }
+
+    .progress-section.visible { display: block; }
+
+    .progress-bar-track {
+      background: #21262d;
+      border-radius: 6px;
+      height: 10px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #238636, #2ea043);
+      transition: width 0.25s ease;
+      width: 0%;
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.82rem;
+      color: #8b949e;
+      margin-top: 4px;
+    }
+
+    .status-box {
+      margin-top: 20px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 14px 16px;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      min-height: 80px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .status-ok    { color: #2ea043; }
+    .status-err   { color: #f85149; }
+    .status-info  { color: #58a6ff; }
+    .status-warn  { color: #d29922; }
+
+    .file-info {
+      font-size: 0.82rem;
+      color: #8b949e;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="icon">⚡</span>High Performance Upload</h1>
+
+  <div class="field">
+    <label for="authToken">Auth Token</label>
+    <input type="text" id="authToken" value="test_token_user123"
+           placeholder="e.g. test_token_user123" />
+  </div>
+
+  <div class="field">
+    <label for="fileInput">File</label>
+    <input type="file" id="fileInput"
+           accept=".mp4,.pdf,.jpg,.jpeg,.png,.gif,.webp,.mov,.avi,.mkv" />
+    <div class="file-info" id="fileInfo">No file selected</div>
+  </div>
+
+  <div class="btn-group">
+    <button class="btn-primary"  id="btnUpload"  onclick="startUpload()">Upload</button>
+    <button class="btn-warning"  id="btnPause"   onclick="pauseUpload()"  disabled>Pause</button>
+    <button class="btn-success"  id="btnResume"  onclick="resumeUpload()" disabled>Resume</button>
+    <button class="btn-danger"   id="btnCancel"  onclick="cancelUpload()" disabled>Cancel</button>
+  </div>
+
+  <div class="progress-section" id="progressSection">
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressBar"></div>
+    </div>
+    <div class="progress-meta">
+      <span id="progressText">0 / 0 chunks</span>
+      <span id="progressPct">0%</span>
+      <span id="progressSpeed">— MB/s</span>
+    </div>
+  </div>
+
+  <div class="status-box" id="statusBox"><span class="status-info">Ready.</span></div>
+</div>
+
+<script>
+// ============================================================
+// Protocol constants (must match gnet-backend/main.go)
+// ============================================================
+const CMD_INIT_UPLOAD   = 0x01;
+const CMD_UPLOAD_CHUNK  = 0x02;
+const CMD_PAUSE_UPLOAD  = 0x03;
+const CMD_RESUME_UPLOAD = 0x04;
+const CMD_CANCEL_UPLOAD = 0x05;
+const CMD_GET_STATUS    = 0x06;
+
+const RESP_OK          = 0x10;
+const RESP_ERROR       = 0x11;
+const RESP_READY       = 0x12;
+const RESP_CHUNK_ACK   = 0x13;
+const RESP_COMPLETE    = 0x14;
+const RESP_STATUS      = 0x15;
+const RESP_PAUSED      = 0x16;
+const RESP_RESUMED     = 0x17;
+const RESP_CANCELLED   = 0x18;
+const RESP_AUTH_FAILED = 0x19;
+const RESP_DUPLICATE   = 0x1A;
+
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB — matches S3 multipart minimum
+const WS_URL     = 'ws://' + window.location.hostname + ':5000/ws/upload';
+
+// ============================================================
+// State
+// ============================================================
+let ws          = null;
+let file        = null;
+let sessionID   = '';
+let totalChunks = 0;
+let sentChunks  = 0;          // next chunk index we will send
+let ackedChunks = 0;          // chunks confirmed by server
+let startTime   = 0;
+let bytesSent   = 0;
+let paused      = false;
+let cancelled   = false;
+let pendingChunks = [];       // after resume: list of missing chunk indices
+
+// ============================================================
+// UI helpers
+// ============================================================
+function log(msg, cls = 'status-info') {
+  const box = document.getElementById('statusBox');
+  box.innerHTML = `<span class="${cls}">${escapeHtml(msg)}</span>`;
+}
+
+function logAppend(msg, cls = 'status-info') {
+  const box = document.getElementById('statusBox');
+  box.innerHTML += `\n<span class="${cls}">${escapeHtml(msg)}</span>`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function setButtons(uploading) {
+  document.getElementById('btnUpload').disabled  = uploading;
+  document.getElementById('btnPause').disabled   = !uploading || paused;
+  document.getElementById('btnResume').disabled  = !paused;
+  document.getElementById('btnCancel').disabled  = !uploading;
+}
+
+function updateProgress(received, total) {
+  const pct = total > 0 ? Math.round(received / total * 100) : 0;
+  document.getElementById('progressBar').style.width  = pct + '%';
+  document.getElementById('progressText').textContent = received + ' / ' + total + ' chunks';
+  document.getElementById('progressPct').textContent  = pct + '%';
+
+  const elapsed = (Date.now() - startTime) / 1000;
+  if (elapsed > 0 && bytesSent > 0) {
+    const speedMBps = (bytesSent / (1024 * 1024)) / elapsed;
+    document.getElementById('progressSpeed').textContent = speedMBps.toFixed(2) + ' MB/s';
+  }
+}
+
+function showProgress() {
+  document.getElementById('progressSection').classList.add('visible');
+}
+
+// ============================================================
+// Binary message builders
+// ============================================================
+
+/**
+ * Wrap a payload (command byte + data) in the wire-format envelope:
+ *   auth_token_size(4) | auth_token | payload_size(4) | payload
+ */
+function buildMessage(authToken, payload) {
+  const tokenBytes   = new TextEncoder().encode(authToken);
+  const totalLen     = 4 + tokenBytes.length + 4 + payload.length;
+  const buf          = new ArrayBuffer(totalLen);
+  const view         = new DataView(buf);
+  let   offset       = 0;
+
+  view.setUint32(offset, tokenBytes.length, false); offset += 4;
+  new Uint8Array(buf, offset, tokenBytes.length).set(tokenBytes); offset += tokenBytes.length;
+  view.setUint32(offset, payload.length, false); offset += 4;
+  new Uint8Array(buf, offset, payload.length).set(payload);
+
+  return buf;
+}
+
+/**
+ * CMD_INIT_UPLOAD payload:
+ *   command(1) | filename_size(2) | filename | total_chunks(4) | chunk_size(4)
+ */
+function buildInitPayload(filename, totalChunks, chunkSize) {
+  const nameBytes  = new TextEncoder().encode(filename);
+  const buf        = new ArrayBuffer(1 + 2 + nameBytes.length + 4 + 4);
+  const view       = new DataView(buf);
+  let   offset     = 0;
+
+  view.setUint8(offset, CMD_INIT_UPLOAD); offset += 1;
+  view.setUint16(offset, nameBytes.length, false); offset += 2;
+  new Uint8Array(buf, offset, nameBytes.length).set(nameBytes); offset += nameBytes.length;
+  view.setUint32(offset, totalChunks, false); offset += 4;
+  view.setUint32(offset, chunkSize, false);
+
+  return new Uint8Array(buf);
+}
+
+/**
+ * CMD_UPLOAD_CHUNK payload:
+ *   command(1) | session_id_size(2) | session_id | chunk_index(4) | chunk_size(4) | chunk_data
+ */
+function buildChunkPayload(sessionID, chunkIndex, chunkData) {
+  const sidBytes  = new TextEncoder().encode(sessionID);
+  const buf       = new ArrayBuffer(1 + 2 + sidBytes.length + 4 + 4 + chunkData.byteLength);
+  const view      = new DataView(buf);
+  let   offset    = 0;
+
+  view.setUint8(offset, CMD_UPLOAD_CHUNK); offset += 1;
+  view.setUint16(offset, sidBytes.length, false); offset += 2;
+  new Uint8Array(buf, offset, sidBytes.length).set(sidBytes); offset += sidBytes.length;
+  view.setUint32(offset, chunkIndex, false); offset += 4;
+  view.setUint32(offset, chunkData.byteLength, false); offset += 4;
+  new Uint8Array(buf, offset, chunkData.byteLength).set(new Uint8Array(chunkData));
+
+  return new Uint8Array(buf);
+}
+
+/**
+ * Session-only command (pause / resume / cancel / status):
+ *   command(1) | session_id_size(2) | session_id
+ */
+function buildSessionPayload(cmd, sessionID) {
+  const sidBytes = new TextEncoder().encode(sessionID);
+  const buf      = new ArrayBuffer(1 + 2 + sidBytes.length);
+  const view     = new DataView(buf);
+  let   offset   = 0;
+
+  view.setUint8(offset, cmd); offset += 1;
+  view.setUint16(offset, sidBytes.length, false); offset += 2;
+  new Uint8Array(buf, offset, sidBytes.length).set(sidBytes);
+
+  return new Uint8Array(buf);
+}
+
+// ============================================================
+// Response parsers
+// ============================================================
+
+/**
+ * Parse RESP_READY:
+ *   RESP_READY(1) | session_id_size(2) | session_id | s3_key_size(2) | s3_key
+ */
+function parseReady(view) {
+  let offset      = 1; // skip response code
+  const sidSize   = view.getUint16(offset, false); offset += 2;
+  const dec       = new TextDecoder();
+  const sid       = dec.decode(new Uint8Array(view.buffer, view.byteOffset + offset, sidSize)); offset += sidSize;
+  const s3Size    = view.getUint16(offset, false); offset += 2;
+  const s3Key     = dec.decode(new Uint8Array(view.buffer, view.byteOffset + offset, s3Size));
+  return { sessionID: sid, s3Key };
+}
+
+/**
+ * Parse RESP_CHUNK_ACK:
+ *   RESP_CHUNK_ACK(1) | chunk_index(4) | received(4) | total(4)
+ */
+function parseChunkAck(view) {
+  return {
+    chunkIndex: view.getUint32(1, false),
+    received:   view.getUint32(5, false),
+    total:      view.getUint32(9, false),
+  };
+}
+
+/**
+ * Parse RESP_DUPLICATE:
+ *   RESP_DUPLICATE(1) | chunk_index(4) | progress(4)
+ */
+function parseDuplicate(view) {
+  return {
+    chunkIndex: view.getUint32(1, false),
+    received:   view.getUint32(5, false),
+  };
+}
+
+/**
+ * Parse RESP_COMPLETE:
+ *   RESP_COMPLETE(1) | s3_key_size(2) | s3_key | file_size(8)
+ */
+function parseComplete(view) {
+  let offset     = 1;
+  const s3Size   = view.getUint16(offset, false); offset += 2;
+  const s3Key    = new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset, s3Size)); offset += s3Size;
+  const sizeHi   = view.getUint32(offset, false);
+  const sizeLo   = view.getUint32(offset + 4, false);
+  const fileSize = sizeHi * 2 ** 32 + sizeLo;
+  return { s3Key, fileSize };
+}
+
+/**
+ * Parse RESP_ERROR:
+ *   RESP_ERROR(1) | msg_size(1) | message
+ */
+function parseError(view) {
+  const msgSize = view.getUint8(1);
+  return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + 2, msgSize));
+}
+
+/**
+ * Parse RESP_PAUSED / RESP_RESUMED common prefix:
+ *   code(1) | received(4) | total(4)
+ */
+function parsePausedResumed(view) {
+  const result = { received: view.getUint32(1, false), total: view.getUint32(5, false) };
+  if (view.getUint8(0) === RESP_RESUMED) {
+    const missingCount = view.getUint32(9, false);
+    const missing = [];
+    for (let i = 0; i < missingCount; i++) {
+      missing.push(view.getUint32(13 + i * 4, false));
+    }
+    result.missing = missing;
+  }
+  return result;
+}
+
+// ============================================================
+// Core upload logic
+// ============================================================
+
+async function startUpload() {
+  file = document.getElementById('fileInput').files[0];
+  if (!file) { log('Please select a file first.', 'status-warn'); return; }
+
+  const authToken = document.getElementById('authToken').value.trim();
+  if (!authToken) { log('Please enter an auth token.', 'status-warn'); return; }
+
+  // Reset state
+  sessionID     = '';
+  sentChunks    = 0;
+  ackedChunks   = 0;
+  bytesSent     = 0;
+  paused        = false;
+  cancelled     = false;
+  pendingChunks = [];
+  totalChunks   = Math.ceil(file.size / CHUNK_SIZE);
+  startTime     = Date.now();
+
+  showProgress();
+  updateProgress(0, totalChunks);
+  log(`Connecting to ${WS_URL} …`, 'status-info');
+  setButtons(true);
+
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    log(`Connected. Initialising upload for "${file.name}" (${totalChunks} chunks)…`, 'status-info');
+    const payload = buildInitPayload(file.name, totalChunks, Math.min(CHUNK_SIZE, file.size));
+    ws.send(buildMessage(authToken, payload));
+  };
+
+  ws.onmessage = (event) => handleResponse(new DataView(event.data), authToken);
+
+  ws.onerror = (err) => {
+    log('WebSocket error — check the console.', 'status-err');
+    setButtons(false);
+  };
+
+  ws.onclose = (event) => {
+    if (!cancelled && ackedChunks < totalChunks) {
+      logAppend(`Connection closed (code ${event.code}). Upload incomplete.`, 'status-warn');
+    }
+    setButtons(false);
+  };
+}
+
+async function handleResponse(view, authToken) {
+  const code = view.getUint8(0);
+
+  switch (code) {
+    case RESP_READY: {
+      const { sessionID: sid, s3Key } = parseReady(view);
+      sessionID = sid;
+      log(`Session ready: ${sessionID}\nS3 key: ${s3Key}\nSending chunks…`, 'status-ok');
+      await sendNextChunk(authToken);
+      break;
+    }
+
+    case RESP_CHUNK_ACK: {
+      const { chunkIndex, received, total } = parseChunkAck(view);
+      ackedChunks = received;
+      bytesSent   = received * CHUNK_SIZE;
+      updateProgress(received, total);
+      await sendNextChunk(authToken);
+      break;
+    }
+
+    case RESP_DUPLICATE: {
+      const { chunkIndex, received } = parseDuplicate(view);
+      ackedChunks = received;
+      updateProgress(received, totalChunks);
+      await sendNextChunk(authToken);
+      break;
+    }
+
+    case RESP_COMPLETE: {
+      const { s3Key, fileSize } = parseComplete(view);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const mbps    = (fileSize / (1024 * 1024) / elapsed).toFixed(2);
+      updateProgress(totalChunks, totalChunks);
+      log(`✅ Upload complete!\nFile: ${file.name}\nS3 key: ${s3Key}\nSize: ${(fileSize / (1024 * 1024)).toFixed(2)} MB\nTime: ${elapsed}s  |  Speed: ${mbps} MB/s`, 'status-ok');
+      setButtons(false);
+      ws.close();
+      break;
+    }
+
+    case RESP_PAUSED: {
+      const { received, total } = parsePausedResumed(view);
+      paused = true;
+      updateProgress(received, total);
+      log(`⏸ Upload paused at chunk ${received}/${total}.`, 'status-warn');
+      document.getElementById('btnPause').disabled  = true;
+      document.getElementById('btnResume').disabled = false;
+      break;
+    }
+
+    case RESP_RESUMED: {
+      const { received, total, missing } = parsePausedResumed(view);
+      paused         = false;
+      pendingChunks  = missing.slice();
+      log(`▶ Upload resumed. Resending ${missing.length} missing chunk(s)…`, 'status-info');
+      document.getElementById('btnPause').disabled  = false;
+      document.getElementById('btnResume').disabled = true;
+      await sendNextChunk(authToken);
+      break;
+    }
+
+    case RESP_CANCELLED:
+      cancelled = true;
+      log('🛑 Upload cancelled.', 'status-warn');
+      setButtons(false);
+      ws.close();
+      break;
+
+    case RESP_AUTH_FAILED:
+      log('❌ Authentication failed. Check your auth token.', 'status-err');
+      setButtons(false);
+      ws.close();
+      break;
+
+    case RESP_ERROR: {
+      const msg = parseError(view);
+      log(`❌ Server error: ${msg}`, 'status-err');
+      setButtons(false);
+      ws.close();
+      break;
+    }
+
+    default:
+      log(`⚠ Unknown response code: 0x${code.toString(16).padStart(2, '0')}`, 'status-warn');
+  }
+}
+
+/**
+ * Send the next pending chunk (sequential — one at a time, wait for ACK).
+ * If pendingChunks is populated (after resume), send from that list first.
+ */
+async function sendNextChunk(authToken) {
+  if (paused || cancelled || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  let chunkIndex;
+
+  if (pendingChunks.length > 0) {
+    chunkIndex = pendingChunks.shift();
+  } else if (sentChunks < totalChunks) {
+    chunkIndex = sentChunks++;
+  } else {
+    return; // all chunks dispatched
+  }
+
+  const start    = chunkIndex * CHUNK_SIZE;
+  const end      = Math.min(start + CHUNK_SIZE, file.size);
+  const slice    = file.slice(start, end);
+  const arrayBuf = await slice.arrayBuffer();
+
+  const payload = buildChunkPayload(sessionID, chunkIndex, arrayBuf);
+  const token   = document.getElementById('authToken').value.trim();
+  ws.send(buildMessage(token, payload));
+}
+
+// ============================================================
+// Pause / Resume / Cancel
+// ============================================================
+
+function pauseUpload() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || paused) return;
+  const token   = document.getElementById('authToken').value.trim();
+  const payload = buildSessionPayload(CMD_PAUSE_UPLOAD, sessionID);
+  ws.send(buildMessage(token, payload));
+}
+
+function resumeUpload() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !paused) return;
+  const token   = document.getElementById('authToken').value.trim();
+  const payload = buildSessionPayload(CMD_RESUME_UPLOAD, sessionID);
+  ws.send(buildMessage(token, payload));
+}
+
+function cancelUpload() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const token   = document.getElementById('authToken').value.trim();
+  const payload = buildSessionPayload(CMD_CANCEL_UPLOAD, sessionID);
+  ws.send(buildMessage(token, payload));
+}
+
+// ============================================================
+// File picker display
+// ============================================================
+document.getElementById('fileInput').addEventListener('change', function () {
+  const f = this.files[0];
+  if (f) {
+    const sizeMB = (f.size / (1024 * 1024)).toFixed(2);
+    const chunks = Math.ceil(f.size / CHUNK_SIZE);
+    document.getElementById('fileInfo').textContent =
+      `${f.name}  —  ${sizeMB} MB  —  ${chunks} chunk${chunks !== 1 ? 's' : ''}`;
+  } else {
+    document.getElementById('fileInfo').textContent = 'No file selected';
+  }
+});
+</script>
+</body>
+</html>
