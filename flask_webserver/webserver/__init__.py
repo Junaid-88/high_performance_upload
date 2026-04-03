@@ -33,8 +33,9 @@ def create_app():
     db.initalize_databse_if_it_dont_exist(app)
     db.init_db_engine(app.config["SQLALCHEMY_URI"])
 
-    from webserver.views import auth
+    from webserver.views import auth, metadata
     app.register_blueprint(auth.auth_bp)
+    app.register_blueprint(metadata.metadata_bp)
     app.add_url_rule("/", endpoint="index")
 
     jwt = JWTManager(app)

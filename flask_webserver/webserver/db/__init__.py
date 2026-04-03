@@ -16,7 +16,7 @@ def exec_sql_script(sql_file_path):
         commands = sql.read().split(";")
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             for command in commands:
-                command.strip()
+                command = command.strip()
                 if command:
                     conn.execute(text(command))
 
@@ -24,7 +24,7 @@ def new_database_needed() -> bool:
     with engine.connect() as conn:
         result = conn.execute(text("""select * from pg_database"""))
         # straight up wishing an empty one will have less than 3 databses
-        if result.rowcount <= 3:
+        if len(result.fetchall()) <= 3:
             return True
         else:
             return False
