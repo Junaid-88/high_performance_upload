@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -24,7 +23,6 @@ import (
 const (
 	GATEWAY_HTTP_PORT   = ":5000"      // Gateway listens here
 	GATEWAY_BINARY_PORT = ":9090"      // Gateway binary protocol port
-	FLASK_BACKEND       = "http://flask_webserver:5001"  // Flask backend
 	GNET_HTTP_BACKEND   = "http://file_server:8081"  // gnet HTTP APIs
 	GNET_BINARY_BACKEND = "file_server:8081"         // gnet binary protocol
 
@@ -35,20 +33,17 @@ const (
 )
 
 // ============================================
-// HTTP Gateway (Routes to Flask or gnet HTTP)
+// HTTP Gateway (Routes to gnet HTTP)
 // ============================================
 
 type HTTPGateway struct {
-	flaskProxy *httputil.ReverseProxy
 	gnetProxy  *httputil.ReverseProxy
 }
 
 func NewHTTPGateway() *HTTPGateway {
-	flaskURL, _ := url.Parse(FLASK_BACKEND)
 	gnetURL, _ := url.Parse(GNET_HTTP_BACKEND)
 
 	return &HTTPGateway{
-		flaskProxy: httputil.NewSingleHostReverseProxy(flaskURL),
 		gnetProxy:  httputil.NewSingleHostReverseProxy(gnetURL),
 	}
 }
@@ -77,16 +72,12 @@ func (gw *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Route based on path
-	switch {
-	case isGnetHTTPRoute(r.URL.Path):
+	if isGnetHTTPRoute(r.URL.Path) {
 		// Route to gnet HTTP server (streaming, internal APIs)
 		log.Printf("→ Routing to gnet HTTP: %s", r.URL.Path)
 		gw.gnetProxy.ServeHTTP(w, r)
-
-	default:
-		// Route to Flask (auth, metadata, control)
-		log.Printf("→ Routing to Flask: %s", r.URL.Path)
-		gw.flaskProxy.ServeHTTP(w, r)
+	} else {
+		http.NotFound(w, r)
 	}
 }
 
@@ -411,7 +402,6 @@ func (sbg *SmartBinaryGateway) readFromBackend(clientConn gnet.Conn, backendConn
 type UnifiedGateway struct {
 	gnet.BuiltinEventEngine
 
-	flaskBackend string
 	gnetBackend  string
 }
 
@@ -441,18 +431,10 @@ func (ug *UnifiedGateway) OnTraffic(c gnet.Conn) (action gnet.Action) {
 
 	// Detect protocol on first packet
 	if ctx.backendConn == nil && len(ctx.buffer) >= 4 {
-		isHTTP := ug.detectHTTP(ctx.buffer)
+		backend := ug.gnetBackend
+		log.Printf("🔍 Routing to gnet backend")
 
-		var backend string
-		if isHTTP {
-			backend = ug.flaskBackend
-			log.Printf("🔍 Detected HTTP protocol → Flask")
-		} else {
-			backend = ug.gnetBackend
-			log.Printf("🔍 Detected binary protocol → gnet")
-		}
-
-		// Connect to appropriate backend
+		// Connect to gnet backend
 		backendConn, err := net.DialTimeout("tcp", backend, 5*time.Second)
 		if err != nil {
 			log.Printf("❌ Backend connection failed: %v", err)
@@ -480,35 +462,6 @@ func (ug *UnifiedGateway) OnTraffic(c gnet.Conn) (action gnet.Action) {
 	}
 
 	return gnet.None
-}
-
-func (ug *UnifiedGateway) detectHTTP(data []byte) bool {
-	// Check for HTTP methods
-	httpMethods := [][]byte{
-		[]byte("GET "),
-		[]byte("POST "),
-		[]byte("PUT "),
-		[]byte("DELETE "),
-		[]byte("PATCH "),
-		[]byte("OPTIONS "),
-		[]byte("HEAD "),
-	}
-
-	for _, method := range httpMethods {
-		if bytes.HasPrefix(data, method) {
-			return true
-		}
-	}
-
-	// Check for binary protocol commands
-	if len(data) > 0 {
-		cmd := data[0]
-		if cmd == CMD_UPLOAD_CHUNK || cmd == CMD_STREAM_RANGE || cmd == CMD_PING {
-			return false
-		}
-	}
-
-	return false
 }
 
 func (ug *UnifiedGateway) OnClose(c gnet.Conn, err error) (action gnet.Action) {
@@ -561,8 +514,8 @@ func main() {
 
 func runSeparateGateways() {
 	log.Printf("🚀 Starting SEPARATE gateways mode")
-	log.Printf("📡 HTTP Gateway: %s → Flask(%s) / gnet(%s)",
-		GATEWAY_HTTP_PORT, FLASK_BACKEND, GNET_HTTP_BACKEND)
+	log.Printf("📡 HTTP Gateway: %s → gnet(%s)",
+		GATEWAY_HTTP_PORT, GNET_HTTP_BACKEND)
 	log.Printf("⚡ Binary Gateway: %s → gnet(%s)",
 		GATEWAY_BINARY_PORT, GNET_BINARY_BACKEND)
 
@@ -595,7 +548,6 @@ func runUnifiedGateway() {
 
 	// This gateway auto-detects HTTP vs Binary protocol
 	unifiedGateway := &UnifiedGateway{
-		flaskBackend: "localhost:5001",
 		gnetBackend:  GNET_BINARY_BACKEND,
 	}
 

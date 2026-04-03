@@ -23,31 +23,6 @@ services:
       retries: 5
       start_period: 10s
 
-  pg_db:
-    image: postgres:17
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    networks:
-    - app-network
-  # Flask Web Server
-
-  flask_webserver:
-    build:
-      context: ./flask_webserver/.
-    command: python3 manage.py runserver --debug
-    volumes:
-      - ./flask_webserver:/app/flask_webserver
-    depends_on:
-      - pg_db
-    ports:
-      - "5001:5001"
-    networks:
-    - app-network
-
   # gnet File Upload Server
   file_server:
     build:
@@ -80,7 +55,6 @@ services:
       - "5000:5000" # HTTP gateway
       - "9090:9090" # Binary gateway
     depends_on:
-      - flask_webserver
       - file_server
     networks:
       - app-network
@@ -99,8 +73,6 @@ services:
 
 volumes:
   minio_data:
-    driver: local
-  pg_data:
     driver: local
 
 networks:
