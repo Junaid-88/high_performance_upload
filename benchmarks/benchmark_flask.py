@@ -12,8 +12,8 @@ Options:
 """
 
 import argparse
-import io
 import os
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -25,21 +25,22 @@ from tabulate import tabulate
 # single upload
 # ---------------------------------------------------------------------------
 
-def run_upload(base_url: str, file_size_bytes: int, upload_idx: int):
+def run_upload(base_url: str, temp_file_path: str, upload_idx: int):
     """
-    POST file_size_bytes of random data to POST /upload.
+    POST the pre-generated file at temp_file_path to POST /upload.
+    Streams directly from disk — near-zero memory per thread.
     Returns (total_time_s, error_str_or_None).
     """
-    data = os.urandom(file_size_bytes)
     filename = f"bench_{upload_idx}_{int(time.time() * 1000)}.mp4"
 
     start = time.perf_counter()
     try:
-        resp = requests.post(
-            f"{base_url}/upload",
-            files={"file": (filename, io.BytesIO(data), "application/octet-stream")},
-            timeout=300,
-        )
+        with open(temp_file_path, "rb") as fh:
+            resp = requests.post(
+                f"{base_url}/upload",
+                files={"file": (filename, fh, "application/octet-stream")},
+                timeout=300,
+            )
         elapsed = time.perf_counter() - start
         if resp.status_code != 200:
             return elapsed, f"HTTP {resp.status_code}: {resp.text[:200]}"
@@ -53,19 +54,17 @@ def run_upload(base_url: str, file_size_bytes: int, upload_idx: int):
 # benchmark harness
 # ---------------------------------------------------------------------------
 
-def run_benchmark(base_url: str, file_size_mb: int, concurrency: int, warmup: int = 2):
-    file_size_bytes = file_size_mb * 1024 * 1024
-
+def run_benchmark(base_url: str, file_size_mb: int, concurrency: int, temp_file_path: str, warmup: int = 2):
     # warm-up
     for i in range(warmup):
-        run_upload(base_url, file_size_bytes, -(i + 1))
+        run_upload(base_url, temp_file_path, -(i + 1))
 
     times = []
     errors = 0
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [
-            pool.submit(run_upload, base_url, file_size_bytes, idx)
+            pool.submit(run_upload, base_url, temp_file_path, idx)
             for idx in range(concurrency)
         ]
         for fut in as_completed(futures):
@@ -118,13 +117,24 @@ def main():
     print(f"Sizes  : {sizes} MB")
     print(f"Conc.  : {concurrencies}\n")
 
+    size_labels = ", ".join(f"{s} MB" for s in sizes)
+    print(f"Generating test files: {size_labels} ...", flush=True)
+
     results = []
-    for size in sizes:
-        for conc in concurrencies:
-            print(f"  running: {size} MB × concurrency {conc} …", end="", flush=True)
-            r = run_benchmark(args.addr, size, conc)
-            results.append(r)
-            print(f" {r['throughput_mbps']:.2f} MB/s")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_files = {}
+        for size in sizes:
+            path = os.path.join(temp_dir, f"bench_{size}mb.bin")
+            with open(path, "wb") as f:
+                f.write(os.urandom(size * 1024 * 1024))
+            temp_files[size] = path
+
+        for size in sizes:
+            for conc in concurrencies:
+                print(f"  running: {size} MB x concurrency {conc} ...", end="", flush=True)
+                r = run_benchmark(args.addr, size, conc, temp_files[size])
+                results.append(r)
+                print(f" {r['throughput_mbps']:.2f} MB/s")
 
     # Pretty table
     headers = ["Size(MB)", "Concurrency", "Throughput(MB/s)", "Avg Time(s)", "Errors"]
