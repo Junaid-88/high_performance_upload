@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY benchmarks/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY benchmarks/flask_upload_server.py /app/flask_upload_server.py
+
+EXPOSE 5002
+
+CMD ["python3", "flask_upload_server.py"]
